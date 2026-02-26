@@ -5,6 +5,11 @@
 
 #include <protection/string_obfuscation.h>
 
+inline uint64_t decrypt_uworld(uint64_t uworld_addr)
+{
+    return (uworld_addr ^ Offsets::Globals::UWorldXorKey);
+}
+
 void c_game::run_update()
 {
     if (!driver.m_base_address)
@@ -14,61 +19,18 @@ void c_game::run_update()
 
     while (true)
     {
-        if (!m_gworld)
+        m_uworld = decrypt_uworld(driver.read<uint64_t>(driver.m_base_address + Offsets::Globals::UWorld));
+        m_game_instance = driver.read<uintptr_t>(m_gworld + Offsets::UWorld::OwningGameInstance);
+        m_game_state = driver.read<uintptr_t>(m_gworld + Offsets::UWorld::GameState);
+        
+        auto local_players = driver.read<uemath::tarray<uintptr_t>>(m_game_instance + Offsets::UGameInstance::LocalPlayers);
+        if (local_players.count > 0 && local_players.data) 
         { 
-            m_gworld = driver.read<uintptr_t>(driver.m_base_address + Offsets::Globals::UWorld);
-            if (!driver.is_valid(m_gworld))
-            {
-                printf(e("Failed to get m_gworld class\n"));
-                continue;
-            }
+            m_local_player = local_players.get(0); 
         }
-
-        if (!m_game_instance)
-        {
-            m_game_instance = driver.read<uintptr_t>(m_gworld + Offsets::UWorld::OwningGameInstance);
-            if (!driver.is_valid(m_game_instance))
-            {
-                printf(e("Failed to get m_game_instance class\n"));
-                continue;
-            }
-        }
-
-        if (!m_game_state)
-        {
-            m_game_state = driver.read<uintptr_t>(m_gworld + Offsets::UWorld::GameState);
-            if (!driver.is_valid(m_game_state))
-            {
-                printf(e("Failed to get m_game_state class\n"));
-                continue;
-            }
-        }
-
-        if (!m_local_player)
-        {
-            auto local_players = driver.read<uemath::tarray<uintptr_t>>(m_game_instance + Offsets::UGameInstance::LocalPlayers);
-            if (local_players.count > 0 && local_players.data) { m_local_player = local_players.get(0); }
-            if (!driver.is_valid(m_local_player))
-            {
-                printf(e("Failed to get m_local_player class\n"));
-                continue;
-            }
-        }
-
-        if (!m_player_controller)
-        {
-            m_player_controller = driver.read<uintptr_t>(m_local_player + Offsets::UPlayer::PlayerController);
-            if (!driver.is_valid(m_player_controller))
-            {
-                printf(e("Failed to get m_player_controller class\n"));
-                continue;
-            }
-        }
-
-        if (!m_acknowledged_pawn)
-        {
-            m_acknowledged_pawn = driver.read<uintptr_t>(m_player_controller + Offsets::APlayerController::AcknowledgedPawn);
-        }
+        
+        m_player_controller = driver.read<uintptr_t>(m_local_player + Offsets::UPlayer::PlayerController);
+        m_acknowledged_pawn = driver.read<uintptr_t>(m_player_controller + Offsets::APlayerController::AcknowledgedPawn);
 
         if (m_gworld && m_player_controller)
         {
@@ -87,8 +49,8 @@ bool c_game::query_camera()
         return false;
     }
 
-    auto location_callback = driver.read<uintptr_t>(m_gworld + Offsets::Globals::CameraLocation);
-    auto rotation_callback = driver.read<uintptr_t>(m_gworld + Offsets::Globals::CameraRotation);
+    auto location_callback = driver.read<uintptr_t>(m_uworld + Offsets::Globals::CameraLocation);
+    auto rotation_callback = driver.read<uintptr_t>(m_uworld + Offsets::Globals::CameraRotation);
 
     if (!location_callback || !rotation_callback)
     {
@@ -112,8 +74,8 @@ bool c_game::query_camera()
     m_camera.rotation.pitch = asin(rot.roll) * (180.0 / M_PI);
     m_camera.rotation.yaw = ((atan2(rot.pitch * -1, rot.yaw) * (180.0 / M_PI)) * -1) * -1;
     m_camera.rotation.roll = rot.roll;
-    m_camera.fov = driver.read<float>(m_player_controller + Offsets::APlayerController::PlayerCameraFov) * 90.f;
-
+    m_camera.fov = driver.read<float>(m_player_controller + Offsets::Globals::CameraFov) * 90.f;
+    
     return true;
 }
 
@@ -190,13 +152,13 @@ uemath::f_vector2d c_game::world_to_screen(const uemath::f_vector& world) const
 
 uemath::f_vector c_game::get_bone_position(uintptr_t mesh, int id)
 {
-    if (!mesh)
+    if (!driver.is_valid(mesh))
         return uemath::f_vector();
 
-    uintptr_t bone_array = driver.read<uintptr_t>(mesh + 0x5E8);
+    uintptr_t bone_array = driver.read<uintptr_t>(mesh + Offsets::USkeletalMesh::BoneArray);
     if (bone_array == NULL)
     {
-        bone_array = driver.read<uintptr_t>(mesh + 0x5E8 + 0x10);
+        bone_array = driver.read<uintptr_t>(mesh + Offsets::USkeletalMesh::BoneArray_cache + 0x10);
     }
 
     if (!bone_array)
@@ -213,8 +175,8 @@ bool c_game::is_visible(uintptr_t mesh)
     if (!mesh)
         return false;
 
-    auto seconds = driver.read<double>(m_gworld + Offsets::Globals::CameraRotation + 0x10);
-    auto last_render_time = driver.read<float>(mesh + 0x32C);
+    auto seconds = driver.read<double>(m_uworld + Offsets::Globals::CameraRotation + 0x10);
+    auto last_render_time = driver.read<float>(mesh + 0x328);
     return seconds - last_render_time <= 0.06f;
 }
 
